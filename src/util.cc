@@ -1057,6 +1057,67 @@ bool ReplaceContent(const string& file_dst, const string& new_content,
   return true;
 }
 
+int64_t ParseRamLimit(const std::string& s) {
+  if (s.empty())
+    return 0;
+  // Trim whitespace
+  size_t start = 0;
+  while (start < s.size() && isspace((unsigned char)s[start])) ++start;
+  size_t end = s.size();
+  while (end > start && isspace((unsigned char)s[end-1])) --end;
+  if (start >= end) return 0;
+  std::string str = s.substr(start, end-start);
+  // Lowercase for suffix handling
+  std::string lower;
+  lower.reserve(str.size());
+  for (char c : str) lower.push_back(tolower((unsigned char)c));
+
+  // Find where numeric part ends
+  size_t pos = 0;
+  bool dot_seen = false;
+  while (pos < lower.size() && (isdigit((unsigned char)lower[pos]) || lower[pos]=='.')) {
+    if (lower[pos]=='.') {
+      if (dot_seen) break;
+      dot_seen = true;
+    }
+    ++pos;
+  }
+  if (pos==0) return 0;
+  std::string num_part = lower.substr(0, pos);
+  std::string suffix = lower.substr(pos);
+  size_t s_start = 0;
+  while (s_start < suffix.size() && isspace((unsigned char)suffix[s_start])) ++s_start;
+  size_t s_end = suffix.size();
+  while (s_end > s_start && isspace((unsigned char)suffix[s_end-1])) --s_end;
+  suffix = suffix.substr(s_start, s_end - s_start);
+
+  char* endptr = nullptr;
+  errno = 0;
+  double value = strtod(num_part.c_str(), &endptr);
+  if (endptr == num_part.c_str() || errno == ERANGE) return 0;
+  if (value <= 0) return 0;
+
+  int64_t mult = 0;
+  if (suffix.empty()) {
+    mult = 1024LL * 1024LL;
+  } else if (suffix == "b" || suffix == "bytes") {
+    mult = 1;
+  } else if (suffix == "k" || suffix == "kb" || suffix == "kib") {
+    mult = 1024LL;
+  } else if (suffix == "m" || suffix == "mb" || suffix == "mib") {
+    mult = 1024LL * 1024LL;
+  } else if (suffix == "g" || suffix == "gb" || suffix == "gib") {
+    mult = 1024LL * 1024LL * 1024LL;
+  } else if (suffix == "t" || suffix == "tb" || suffix == "tib") {
+    mult = 1024LL * 1024LL * 1024LL * 1024LL;
+  } else {
+    return 0;
+  }
+  double bytes = value * (double)mult;
+  if (bytes > (double)INT64_MAX) return INT64_MAX;
+  return (int64_t)bytes;
+}
+
 int platformAwareUnlink(const char* filename) {
 	#ifdef _WIN32
 		return _unlink(filename);

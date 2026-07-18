@@ -147,4 +147,10 @@ inline To FunctionCast(From from) {
 
 int platformAwareUnlink(const char* filename);
 
+/// Parse a RAM value string like "2g", "512M", "1024", etc. into bytes.
+/// Supported suffixes (case-insensitive): k, kb, m, mb, g, gb, t, tb.
+/// If no suffix is present, the value is interpreted as megabytes for
+/// convenience (so "2048" means 2048 MB). Returns 0 on parse failure.
+int64_t ParseRamLimit(const std::string& s);
+
 #endif  // NINJA_UTIL_H_

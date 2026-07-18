@@ -177,6 +177,16 @@ Edge* Plan::FindWork() {
   return work;
 }
 
+void Plan::RequeueEdge(Edge* edge) {
+  if (!edge) return;
+  ready_.push(edge);
+}
+
+Edge* Plan::PeekWork() const {
+  if (ready_.empty()) return NULL;
+  return ready_.top();
+}
+
 void Plan::ScheduleWork(map<Edge*, Want>::iterator want_e) {
   if (want_e->second == kWantToFinish) {
     // This edge has already been scheduled.  We can get here again if an edge
@@ -703,6 +713,29 @@ bool Builder::AlreadyUpToDate() const {
   return !plan_.more_to_do();
 }
 
+int64_t Builder::GetEdgeRamRequirement(const Edge* edge) const {
+  if (!edge) return 0;
+  // Check common variable names for RAM requirement per edge
+  // Users can set e.g. `ram = 2g` or `memory = 512m` on a rule or edge
+  std::string ram_str = edge->GetBinding("ram");
+  if (ram_str.empty())
+    ram_str = edge->GetBinding("memory");
+  if (ram_str.empty())
+    ram_str = edge->GetBinding("ram_usage");
+  if (ram_str.empty())
+    ram_str = edge->GetBinding("edge_ram");
+  if (ram_str.empty()) {
+    // No explicit requirement -> use default per job
+    return config_.default_ram_per_job;
+  }
+  int64_t v = ParseRamLimit(ram_str);
+  if (v <= 0) {
+    // If parsing fails, fall back to default
+    return config_.default_ram_per_job;
+  }
+  return v;
+}
+
 ExitStatus Builder::Build(string* err) {
   assert(!AlreadyUpToDate());
   plan_.PrepareQueue();
@@ -722,11 +755,13 @@ ExitStatus Builder::Build(string* err) {
   // We are about to start the build process.
   status_->BuildStarted();
 
+  if (config_.max_ram > 0 && config_.verbosity != BuildConfig::QUIET) {
+    status_->Info("RAM limit: %lld MB (per job default %lld MB)",
+                  (long long)(config_.max_ram / (1024*1024)),
+                  (long long)(config_.default_ram_per_job / (1024*1024)));
+  }
+
   // This main loop runs the entire build process.
-  // It is structured like this:
-  // First, we attempt to start as many commands as allowed by the
-  // command runner.
-  // Second, we attempt to wait for / reap the next finished command.
   while (plan_.more_to_do()) {
     // See if we can start any more commands.
     if (failures_allowed) {
@@ -735,6 +770,40 @@ ExitStatus Builder::Build(string* err) {
         Edge* edge = plan_.FindWork();
         if (!edge)
           break;
+
+        int64_t required_ram = 0;
+        bool check_ram = (config_.max_ram > 0 && !edge->is_phony());
+        if (check_ram) {
+          required_ram = GetEdgeRamRequirement(edge);
+          if (required_ram <= 0)
+            required_ram = config_.default_ram_per_job;
+
+          if (required_ram > config_.max_ram) {
+            // Heavy job (e.g. linking 4GB while limit 2GB) - allow exclusive
+            if (current_ram_usage_ > 0) {
+              if (jobserver_)
+                jobserver_->Release(std::move(edge->job_slot_));
+              plan_.RequeueEdge(edge);
+              break;
+            } else {
+              if (config_.verbosity != BuildConfig::QUIET &&
+                  config_.verbosity != BuildConfig::NO_STATUS_UPDATE) {
+                status_->Warning(
+                    "RAM limit %lld MB: edge requiring %lld MB exceeds limit, "
+                    "running exclusively: %s",
+                    (long long)(config_.max_ram / (1024*1024)),
+                    (long long)(required_ram / (1024*1024)),
+                    edge->outputs_.empty() ? "unknown"
+                                           : edge->outputs_[0]->path().c_str());
+              }
+            }
+          } else if (current_ram_usage_ + required_ram > config_.max_ram) {
+            if (jobserver_)
+              jobserver_->Release(std::move(edge->job_slot_));
+            plan_.RequeueEdge(edge);
+            break;
+          }
+        }
 
         if (edge->GetBindingBool("generator")) {
           scan_.build_log()->Close();
@@ -754,32 +823,25 @@ ExitStatus Builder::Build(string* err) {
           }
         } else {
           ++pending_commands;
-
+          if (check_ram) {
+            current_ram_usage_ += required_ram;
+            running_edge_ram_[edge] = required_ram;
+          }
           --capacity;
-
-          // Re-evaluate capacity.
           size_t current_capacity = command_runner_->CanRunMore();
           if (current_capacity < capacity)
             capacity = current_capacity;
         }
       }
-
-       // We are finished with all work items and have no pending
-       // commands. Therefore, break out of the main loop.
        if (pending_commands == 0 && !plan_.more_to_do()) break;
     }
 
-    // See if we can reap any finished commands.
     if (pending_commands) {
-      // Tell command runner that if jobserver tokens become available while
-      // waiting, it should notify us - but only if we have more work to do.
       const bool watch_jobserver = plan_.work_ready();
       BuildResult result =
           command_runner_->WaitForCommandOrJobserverToken(watch_jobserver);
 
       if (result.finished()) {
-        // Shouldn't be possible, since we assumed that there
-        // are still pending commands
         Fatal("internal error");
       }
 
@@ -789,44 +851,37 @@ ExitStatus Builder::Build(string* err) {
         *err = "interrupted by user";
         return result.exit_status();
       } else if (result.command_completed()) {
-        // We know that the result is from a completed command
         BuildResult::CommandCompleted& cc = result.GetCommandCompleted();
         --pending_commands;
+        auto ram_it = running_edge_ram_.find(cc.edge);
+        if (ram_it != running_edge_ram_.end()) {
+          current_ram_usage_ -= ram_it->second;
+          if (current_ram_usage_ < 0) current_ram_usage_ = 0;
+          running_edge_ram_.erase(ram_it);
+        }
         bool command_finished = FinishCommand(cc, err);
         SetFailureCode(result.exit_status());
         if (!command_finished) {
           Cleanup();
           status_->BuildFinished();
           if (result.success()) {
-            // If the command pretend succeeded, the status wasn't set to a
-            // proper exit code, so we set it to ExitFailure.
             cc.status = ExitFailure;
             SetFailureCode(result.exit_status());
           }
           return result.exit_status();
         }
-
         if (!result.success()) {
           if (failures_allowed)
             failures_allowed--;
         }
       } else if (result.jobserver_token_available()) {
-        // Note: currently we only react to jobserver tokens availability
-        // on non-Windows platforms.
-
-        // Jobserver token is available; start main loop over to try to
-        // acquire jobserver token.
         continue;
       } else {
-        // Should be unreachable
         Fatal("internal bug: unexpected BuildResult state");
       }
-
-      // We made some progress; start the main loop over.
       continue;
     }
 
-    // If we get here, we cannot make any more progress.
     status_->BuildFinished();
     if (failures_allowed == 0) {
       if (config_.failures_allowed > 1)
@@ -837,13 +892,13 @@ ExitStatus Builder::Build(string* err) {
       *err = "cannot make progress due to previous errors";
     else
       *err = "stuck [this is a bug]";
-
     return GetExitCode();
   }
 
   status_->BuildFinished();
   return ExitSuccess;
 }
+
 
 bool Builder::StartEdge(Edge* edge, string* err) {
   METRIC_RECORD("StartEdge");

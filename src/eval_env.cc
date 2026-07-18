@@ -85,7 +85,11 @@ bool Rule::IsReservedBinding(StringPiece var) {
       var == "restat" ||
       var == "rspfile" ||
       var == "rspfile_content" ||
-      var == "msvc_deps_prefix";
+      var == "msvc_deps_prefix" ||
+      var == "ram" ||
+      var == "memory" ||
+      var == "ram_usage" ||
+      var == "edge_ram";
 }
 
 const map<string, std::unique_ptr<const Rule>, StringPieceLess>& BindingEnv::GetRules() const {

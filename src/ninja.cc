@@ -248,7 +248,12 @@ void Usage(const BuildConfig& config) {
 "  -d MODE  enable debugging (use '-d list' to list modes)\n"
 "  -t TOOL  run a subtool (use '-t list' to list subtools)\n"
 "    terminates toplevel options; further flags are passed to the tool\n"
-"  -w FLAG  adjust warnings (use '-w list' to list warnings)\n",
+"  -w FLAG  adjust warnings (use '-w list' to list warnings)\n"
+"  \n"
+"  env vars:\n"
+"    NINJA_RAM_LIMIT  max total RAM for jobs (e.g. 2g, 2048m, 2GB) [default=no limit]\n"
+"    NINJA_RAM_PER_JOB default RAM per job when not specified in rule (e.g. 1g) [default=1g]\n"
+"    In build.ninja, set per rule/edge: ram = 4g or memory = 512m\n",
           kNinjaVersion, config.parallelism);
 }
 
@@ -1840,6 +1845,34 @@ NORETURN void real_main(int argc, char** argv) {
   int exit_code = ReadFlags(&argc, &argv, &options, &config);
   if (exit_code >= 0)
     exit(exit_code);
+
+  // --- RAM limit from environment ---
+  // Support multiple env var names for flexibility
+  {
+    const char* ram_vars[] = { "NINJA_RAM_LIMIT", "NINJA_MAX_RAM", "NINJA_RAM", nullptr };
+    const char* per_job_vars[] = { "NINJA_RAM_PER_JOB", "NINJA_RAM_PER_JOB_MB", "NINJA_DEFAULT_RAM_PER_JOB", nullptr };
+    string ram_limit_str;
+    for (int i = 0; ram_vars[i]; ++i) {
+      const char* v = getenv(ram_vars[i]);
+      if (v && v[0]) { ram_limit_str = v; break; }
+    }
+    if (!ram_limit_str.empty()) {
+      int64_t bytes = ParseRamLimit(ram_limit_str);
+      if (bytes > 0) {
+        config.max_ram = bytes;
+        config.ram_limit_from_env = true;
+      }
+    }
+    string per_job_str;
+    for (int i = 0; per_job_vars[i]; ++i) {
+      const char* v = getenv(per_job_vars[i]);
+      if (v && v[0]) { per_job_str = v; break; }
+    }
+    if (!per_job_str.empty()) {
+      int64_t bytes = ParseRamLimit(per_job_str);
+      if (bytes > 0) config.default_ram_per_job = bytes;
+    }
+  }
 
   Status* status = Status::factory(config);
 

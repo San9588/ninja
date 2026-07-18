@@ -52,6 +52,12 @@ struct Plan {
   // Returns NULL if there's no work to do.
   Edge* FindWork();
 
+  /// Push an edge back to ready queue (used for RAM limiting).
+  void RequeueEdge(Edge* edge);
+
+  /// Peek at top ready edge without popping.
+  Edge* PeekWork() const;
+
   /// Returns true if there's more work to be done.
   bool more_to_do() const { return wanted_edges_ > 0 && command_edges_ > 0; }
 
@@ -203,6 +209,14 @@ struct BuildConfig {
   /// when non-null.
   const char* progress_status_format = nullptr;
   DepfileParserOptions depfile_parser_options;
+
+  // --- RAM limit feature (env-driven) ---
+  /// Total RAM allowed for parallel jobs, in bytes. 0 = no limit.
+  int64_t max_ram = 0;
+  /// Default RAM assumed per job if not specified on edge, in bytes.
+  int64_t default_ram_per_job = 1024LL * 1024LL * 1024LL; // 1GB default
+  /// Whether RAM limit was set from env variable.
+  bool ram_limit_from_env = false;
 };
 
 /// Builder wraps the build process: starting commands, updating status.
@@ -267,9 +281,16 @@ private:
                    const std::string& deps_type, const std::string& deps_prefix,
                    std::vector<Node*>* deps_nodes, std::string* err);
 
+  /// Returns RAM requirement for an edge in bytes, using its bindings.
+  int64_t GetEdgeRamRequirement(const Edge* edge) const;
+
   /// Map of running edge to time the edge started running.
   typedef std::map<const Edge*, int> RunningEdgeMap;
   RunningEdgeMap running_edges_;
+
+  /// RAM tracking for running edges.
+  std::map<const Edge*, int64_t> running_edge_ram_;
+  int64_t current_ram_usage_ = 0;
 
   /// Time the build started.
   int64_t start_time_millis_;
