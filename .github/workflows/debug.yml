@@ -1,4 +1,4 @@
-name: Terminal
+name: ninja build
 
 on:
   workflow_dispatch:
@@ -11,19 +11,32 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Ngrok SSH
+      # Terminal SSH Access Authorized Key Setup
+      - name: Setup SSH Key
         uses: shimataro/ssh-key-action@v2
         with:
           key: ${{ secrets.SSH_PUBLIC_KEY }}
           known_hosts: unneeded
 
+      # Official Ngrok Install & Tunnel Setup
       - name: Start Ngrok Tunnel
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
         run: |
-          curl -s https://bin.equinox.io/c/bNyA1xQZYv/ngrok-v3-stable-linux-arm64.tgz | tar xz
-          ./ngrok config add-authtoken $NGROK_AUTHTOKEN
-          ./ngrok tcp 22 --log=stdout &
+          # Install Ngrok via official package manager
+          curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+          sudo apt update && sudo apt install ngrok -y
+
+          # Add Authtoken & Start Tunnel
+          ngrok config add-authtoken $NGROK_AUTHTOKEN
+          ngrok tcp 22 --log=stdout > ngrok.log &
           sleep 5
+
+          # Print Connection Command
+          echo "=========================================="
           curl -s http://localhost:4040/api/tunnels | grep -o 'tcp://[^"]*'
+          echo "=========================================="
+
+          # Keep session alive non-stop
           tail -f /dev/null
