@@ -1,4 +1,4 @@
-name: ninja build
+name: Ninja build
 
 on:
   workflow_dispatch:
@@ -11,32 +11,23 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Terminal SSH Access Authorized Key Setup
+      # 1. SSH Authorized Key Setup
       - name: Setup SSH Key
         uses: shimataro/ssh-key-action@v2
         with:
           key: ${{ secrets.SSH_PUBLIC_KEY }}
           known_hosts: unneeded
 
-      # Official Ngrok Install & Tunnel Setup
-      - name: Start Ngrok Tunnel
-        env:
-          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+      # 2. Start Pinggy TCP Tunnel (Free, No Card, Direct TCP)
+      - name: Start SSH Tunnel
         run: |
-          # Install Ngrok via official package manager
-          curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
-          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
-          sudo apt update && sudo apt install ngrok -y
-
-          # Add Authtoken & Start Tunnel
-          ngrok config add-authtoken $NGROK_AUTHTOKEN
-          ngrok tcp 22 --log=stdout > ngrok.log &
+          ssh -o StrictHostKeyChecking=no -p 443 -R0:localhost:22 a.pinggy.io > pinggy.log 2>&1 &
           sleep 5
+          
+          echo "======================================================="
+          echo "DIRECT SSH CONNECTION COMMAND:"
+          grep -o 'ssh -p [0-9]* .*@a.pinggy.io' pinggy.log || cat pinggy.log
+          echo "======================================================="
 
-          # Print Connection Command
-          echo "=========================================="
-          curl -s http://localhost:4040/api/tunnels | grep -o 'tcp://[^"]*'
-          echo "=========================================="
-
-          # Keep session alive non-stop
+          # Session ko active rakhne ke liye
           tail -f /dev/null
