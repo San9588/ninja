@@ -1,0 +1,15 @@
+name: Interactive Terminal Session (ARM64)
+
+on:
+  workflow_dispatch: # Sirf manual trigger ke liye (Termux se)
+
+jobs:
+  interactive-shell:
+    runs-on: ubuntu-24.04-arm # Fast ARM64 Runner
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # VM par SSH/Terminal access start karega
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
