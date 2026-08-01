@@ -1,15 +1,25 @@
-name: Interactive Terminal Session (ARM64)
+name: Zero-Lag Terminal (Tailscale)
 
 on:
-  workflow_dispatch: # Sirf manual trigger ke liye (Termux se)
+  workflow_dispatch:
 
 jobs:
   interactive-shell:
-    runs-on: ubuntu-24.04-arm # Fast ARM64 Runner
+    runs-on: ubuntu-24.04-arm
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # VM par SSH/Terminal access start karega
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
+      # Tailscale Setup
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          version: latest
+
+      # Signal trap ke saath clean infinite wait loop
+      - name: Keep Alive
+        run: |
+          echo "VM Connected to Tailscale! System non-stop chalta rahega..."
+          tail -f /dev/null
