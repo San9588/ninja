@@ -1,4 +1,4 @@
-name: Zero-Lag Terminal (Tailscale)
+name: Terminal
 
 on:
   workflow_dispatch:
@@ -11,15 +11,19 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Tailscale Setup
-      - name: Connect to Tailscale
-        uses: tailscale/github-action@v2
+      - name: Setup Ngrok SSH
+        uses: shimataro/ssh-key-action@v2
         with:
-          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
-          version: latest
+          key: ${{ secrets.SSH_PUBLIC_KEY }}
+          known_hosts: unneeded
 
-      # Signal trap ke saath clean infinite wait loop
-      - name: Keep Alive
+      - name: Start Ngrok Tunnel
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
         run: |
-          echo "VM Connected to Tailscale! System non-stop chalta rahega..."
+          curl -s https://bin.equinox.io/c/bNyA1xQZYv/ngrok-v3-stable-linux-arm64.tgz | tar xz
+          ./ngrok config add-authtoken $NGROK_AUTHTOKEN
+          ./ngrok tcp 22 --log=stdout &
+          sleep 5
+          curl -s http://localhost:4040/api/tunnels | grep -o 'tcp://[^"]*'
           tail -f /dev/null
