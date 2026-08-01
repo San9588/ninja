@@ -1,0 +1,40 @@
+name: Continuous Integration & Native Build Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      enable_interactive_mode:
+        description: 'Enable interactive step-by-step compilation'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  native-ninja-build:
+    name: Build & Verify Native Toolchain (ARM64)
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      # 1. Source Code Checkout
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # 2. Build Dependencies & Ninja Installation
+      - name: Install Build System & Ninja
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential ninja-build cmake ccache git htop
+
+      # 3. Verify Ninja Environment
+      - name: Check Ninja Version
+        run: |
+          ninja --version
+
+      # 4. Interactive Live Terminal (Tmate)
+      - name: Launch Interactive Build Debugger
+        if: ${{ inputs.enable_interactive_mode == true || failure() }}
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
